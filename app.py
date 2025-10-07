@@ -1,91 +1,47 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
-# ========== CẤU HÌNH TRANG ==========
-st.set_page_config(page_title="Pending Jobs Tracker", layout="wide")
-st.title("📋 Pending Warranty Jobs Tracker")
+# ==== 1. Tự động refresh dashboard mỗi 30 giây ====
+st_autorefresh(interval=30 * 1000, key="refresh")
 
-# ========== ĐỌC FILE TĨNH ==========
-@st.cache_data
-def load_data():
-    try:
-        df = pd.read_excel("streamlit_proc.xlsx")
-    except FileNotFoundError:
-        st.error("❌ Không tìm thấy file 'streamlit_proc.xlsx'. Hãy upload file Excel vào cùng thư mục với app.py.")
-        st.stop()
+st.sidebar.title("Cài đặt Dashboard")
+uploaded_file = st.sidebar.file_uploader("Chọn file CSV", type="csv")
 
-    # Chuẩn hóa dữ liệu ngày
-    df['assigned_time_tat'] = pd.to_datetime(df['assigned_time_tat'], errors='coerce')
-    # Thêm số ngày pending
-    today = pd.Timestamp(datetime.now().date())
-    df['Pending_Days'] = (today - df['assigned_time_tat']).dt.days
-    return df
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    df['assigned_time_tat'] = pd.to_datetime(df['assigned_time_tat'])
 
-df = load_data()
+    # Thời gian tối đa (giờ) để hiển thị thanh tiến trình
+    MAX_HOURS = st.sidebar.number_input("Thời gian tối đa (giờ)", min_value=1, value=72)
 
-# ========== BỘ LỌC ==========
-st.sidebar.header("🔍 Bộ lọc")
-asc_list = sorted(df['asc_account_name'].dropna().unique().tolist())
-selected_asc = st.sidebar.selectbox("Chọn trạm bảo hành", ["Tất cả"] + asc_list)
+    st.title("Dashboard Pending Jobs")
 
-status_list = sorted(df['sub_status'].dropna().unique().tolist())
-selected_status = st.sidebar.multiselect("Chọn trạng thái", status_list, default=status_list)
+    # Sắp xếp job theo thời gian assigned (từ lâu nhất đến mới nhất)
+    df = df.sort_values(by='assigned_time_tat')
 
-keyword = st.sidebar.text_input("Nhập từ khóa (model, mô tả, mã ca...)")
-
-# ========== LỌC DỮ LIỆU ==========
-filtered = df.copy()
-if selected_asc != "Tất cả":
-    filtered = filtered[filtered['asc_account_name'] == selected_asc]
-
-if selected_status:
-    filtered = filtered[filtered['sub_status'].isin(selected_status)]
-
-if keyword:
-    keyword_lower = keyword.lower()
-    filtered = filtered[
-        filtered.apply(lambda row: keyword_lower in str(row).lower(), axis=1)
-    ]
-
-# ========== HIỂN THỊ THỐNG KÊ ==========
-st.subheader("📊 Thống kê tổng quan")
-col1, col2, col3 = st.columns(3)
-col1.metric("Tổng số ca", len(filtered))
-col2.metric("Số trạm", len(filtered['asc_account_name'].unique()))
-col3.metric("Pending trung bình (ngày)", round(filtered['Pending_Days'].mean(), 1) if not filtered.empty else 0)
-
-# ========== CẢNH BÁO MÀU ==========
-def color_pending(val):
-    if pd.isna(val):
-        return ''
-    if val > 10:
-        color = 'background-color: #ff4d4d; color: white;'  # đỏ
-    elif val > 5:
-        color = 'background-color: #ffd633;'  # vàng
-    else:
-        color = ''
-    return color
-
-# ========== HIỂN THỊ BẢNG ==========
-st.subheader("📑 Danh sách Pending Jobs")
-if filtered.empty:
-    st.warning("⚠️ Không có dữ liệu phù hợp với bộ lọc.")
+    for idx, row in df.iterrows():
+        job_name = row['job_name']
+        start_time = row['assigned_time_tat']
+        elapsed_hours = (datetime.now() - start_time).total_seconds() / 3600
+        
+        # % thanh tiến trình (0 → chưa quá hạn, 1 → quá MAX_HOURS)
+        progress = min(elapsed_hours / MAX_HOURS, 1.0)
+        
+        # Gradient màu: xanh → vàng → đỏ
+        if progress < 0.5:
+            color = f'rgb({int(0 + progress*2*255)},255,0)'  # từ xanh sang vàng
+        else:
+            color = f'rgb(255,{int(255 - (progress-0.5)*2*255)},0)'  # từ vàng sang đỏ
+        
+        st.write(f"**{job_name}** - Pending {elapsed_hours:.1f} giờ")
+        
+        # Hiển thị thanh tiến trình với tooltip
+        st.markdown(f"""
+        <div title="{elapsed_hours:.1f} giờ" style="background-color: #eee; border-radius: 5px; width: 100%; height: 20px; margin-bottom:5px;">
+            <div style="width: {progress*100}%; background-color: {color}; height: 100%; border-radius: 5px;"></div>
+        </div>
+        """, unsafe_allow_html=True)
 else:
-    styled_df = filtered.style.applymap(color_pending, subset=['Pending_Days'])
-    st.dataframe(styled_df, use_container_width=True, height=600)
-
-    # ========== EXPORT ==========
-    def to_excel(df):
-        from io import BytesIO
-        output = BytesIO()
-        df.to_excel(output, index=False)
-        return output.getvalue()
-
-    excel_data = to_excel(filtered)
-    st.download_button(
-        label="⬇️ Tải kết quả lọc (Excel)",
-        data=excel_data,
-        file_name="pending_filtered.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    st.info("Vui lòng tải file CSV lên để hiển thị dashboard.")
