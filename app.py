@@ -1,75 +1,78 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
+import datetime
 
-# ==== 1. Tự động refresh dashboard mỗi 30 giây ====
-st_autorefresh(interval=30 * 1000, key="refresh")
+# =========================
+# CẤU HÌNH TRANG
+# =========================
+st.set_page_config(
+    page_title="Pending Time Tracker",
+    layout="wide",
+)
 
-st.set_page_config(page_title="Pending Jobs Dashboard", layout="wide")
+st.title("⏱️ Theo dõi thời gian pending của các job")
 
-st.sidebar.title("⚙️ Cài đặt Dashboard")
-uploaded_file = st.sidebar.file_uploader("📂 Chọn file CSV", type="csv")
+# =========================
+# ĐỌC FILE CÓ SẴN
+# =========================
+try:
+    df = pd.read_excel("streamlit_proc.xlsx")
+except Exception as e:
+    st.error(f"Không thể đọc file dữ liệu: {e}")
+    st.stop()
 
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    df['assigned_time_tat'] = pd.to_datetime(df['assigned_time_tat'], errors='coerce')
+# =========================
+# KIỂM TRA CỘT
+# =========================
+if "assigned_time_tat" not in df.columns:
+    st.error("⚠️ Không tìm thấy cột 'assigned_time_tat' trong file dữ liệu.")
+    st.stop()
 
-    MAX_HOURS = st.sidebar.number_input("⏱ Thời gian tối đa (giờ)", min_value=1, value=72)
+# =========================
+# XỬ LÝ DỮ LIỆU
+# =========================
+# Chuyển sang kiểu datetime
+df["assigned_time_tat"] = pd.to_datetime(df["assigned_time_tat"], errors="coerce")
 
-    st.title("📊 Dashboard Pending Jobs (Tự động cập nhật)")
+# Thời gian hiện tại
+now = datetime.datetime.now()
 
-    # Sắp xếp theo thời gian assigned
-    df = df.sort_values(by='assigned_time_tat')
+# Tính thời gian pending (giờ)
+df["pending_hours"] = (now - df["assigned_time_tat"]).dt.total_seconds() / 3600
 
-    for idx, row in df.iterrows():
-        job_name = row['job_name']
-        start_time = row['assigned_time_tat']
+# =========================
+# HIỂN THỊ BẢNG VỚI THANH MÀU
+# =========================
 
-        if pd.isna(start_time):
-            continue
+def color_scale(value):
+    """
+    Hàm chuyển số giờ thành màu đỏ đậm dần theo thời gian.
+    Dưới 1h: xanh nhạt, 1–3h: cam, >3h: đỏ đậm.
+    """
+    if pd.isna(value):
+        return "background-color: #f0f0f0;"
+    elif value < 1:
+        return "background-color: #d4edda;"  # xanh nhạt
+    elif value < 3:
+        return "background-color: #ffeeba;"  # vàng cam
+    elif value < 6:
+        return "background-color: #f8d7da;"  # hồng nhạt
+    else:
+        return "background-color: #dc3545; color: white;"  # đỏ đậm
 
-        elapsed_hours = (datetime.now() - start_time).total_seconds() / 3600
-        progress = min(elapsed_hours / MAX_HOURS, 1.0)
+st.subheader("📋 Danh sách job và thời gian pending:")
 
-        # ==== Gradient màu: xanh -> vàng -> đỏ -> đỏ đậm ====
-        if progress < 0.5:
-            # xanh -> vàng
-            r = int(progress * 2 * 255)
-            g = 255
-            b = 0
-        elif progress < 1.0:
-            # vàng -> đỏ
-            r = 255
-            g = int(255 - (progress - 0.5) * 2 * 255)
-            b = 0
-        else:
-            # quá hạn -> đỏ đậm dần
-            extra = min((elapsed_hours - MAX_HOURS) / MAX_HOURS, 1.0)
-            r = 153
-            g = int(0 + (1 - extra) * 30)
-            b = int(0 + (1 - extra) * 30)
+styled_df = df.style.applymap(color_scale, subset=["pending_hours"]).format({
+    "pending_hours": "{:.1f} giờ"
+})
 
-        color = f'rgb({r},{g},{b})'
+st.dataframe(styled_df, use_container_width=True)
 
-        st.write(f"**{job_name}** - ⏰ Đã pending {elapsed_hours:.1f} giờ")
-
-        # ==== Hiển thị thanh tiến trình ====
-        st.markdown(f"""
-        <div title="{elapsed_hours:.1f} giờ" style="
-            background-color: #eee;
-            border-radius: 5px;
-            width: 100%;
-            height: 20px;
-            margin-bottom:5px;">
-            <div style="
-                width: {progress*100}%;
-                background-color: {color};
-                height: 100%;
-                border-radius: 5px;">
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-else:
-    st.info("📤 Vui lòng tải file CSV lên để hiển thị dashboard.")
+# =========================
+# HIỂN THỊ THỐNG KÊ
+# =========================
+st.markdown("---")
+col1, col2, col3 = st.columns(3)
+col1.metric("Số job", len(df))
+col2.metric("Trung bình pending (giờ)", f"{df['pending_hours'].mean():.1f}")
+col3.metric("Job pending > 6h", (df['pending_hours'] > 6).sum())
